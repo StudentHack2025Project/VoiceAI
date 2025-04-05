@@ -49,7 +49,6 @@ def motivational_prompts_function(original_motivational_prompts):
     text_to_speech(sample_text)
         
 
-motivational_prompts()
 
 while True:
     schedule.run_pending()
