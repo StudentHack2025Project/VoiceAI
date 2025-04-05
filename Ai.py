@@ -26,7 +26,7 @@ def server_initiation():
 tts_config, sse = server_initiation()   
 def text_to_speech(text): 
     with AudioPlayer() as player:
-        response = sse.send(text, tts_config=tts_config)
+        response = sse.send(txt, tts_config=tts_config)
         player.play(response)
         player.save_audio('output.wav')  # save the audio to a .wav file
         
@@ -48,8 +48,6 @@ def motivational_prompts_function(original_motivational_prompts):
     sample_text = random.choice(original_motivational_prompts)
     text_to_speech(sample_text)
         
-
-motivational_prompts()
 
 while True:
     schedule.run_pending()
