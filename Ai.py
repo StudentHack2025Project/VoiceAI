@@ -1,6 +1,10 @@
 import os
 import time
 import schedule
+import sounddevice as sd
+import numpy as np
+import pyqtgraph as pg
+from PyQt5.QtCore import QTimer
 from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
 from dotenv import load_dotenv
@@ -25,6 +29,12 @@ class VoiceAIApp(QWidget):
         self.init_welcome_ui()
         self.init_main_ui()
         self.init_stay_focused_ui()
+        self.is_recording = False
+        self.audio_buffer = []
+        self.stream = None
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_waveform)
+
 
         app_style = """
             QWidget {
@@ -179,6 +189,12 @@ class VoiceAIApp(QWidget):
         layout.addWidget(QLabel("Task"))
         layout.addWidget(self.task_input)
         layout.addLayout(btn_row)
+        
+        self.plot_widget = pg.PlotWidget(title="Live Microphone Input")
+        self.plot_widget.setYRange(-1, 1)
+        self.waveform_plot = self.plot_widget.plot(pen='g')
+        layout.addWidget(self.plot_widget)
+        
         layout.addStretch()
         layout.addWidget(self.schedule_button, alignment=Qt.AlignRight)
 
@@ -187,27 +203,75 @@ class VoiceAIApp(QWidget):
         self.stack.addWidget(page)
 
     def start_recording(self):
+        self.is_recording = True
+        self.audio_buffer = []
+        
         self.text_to_speech("Recording started.")
-        print("🎙 Start recording...")
-        recognizer = sr.Recognizer()
+        self.transcription_label.setText("🎙 Listening...")
 
-        with sr.Microphone() as source:
-            self.transcription_label.setText("Listening...")
+        def callback(indata, frames, time, status):
+            if self.is_recording:
+                self.audio_buffer.append(indata.copy())
+
+        self.stream = sd.InputStream(callback=callback, channels=1, samplerate=16000)
+        self.stream.start()
+        self.timer.start(50)  # update plot every 50ms
+
+
+    def stop_recording(self):
+        self.is_recording = False
+        self.timer.stop()
+        self.stream.stop()
+        self.stream.close()
+
+        self.text_to_speech("Recording stopped.")
+        self.transcription_label.setText("⏹ Transcribing...")
+
+        # Combine buffer into one array
+        audio_data = np.concatenate(self.audio_buffer, axis=0)
+
+        # Save to temporary WAV file for recognition
+        import soundfile as sf
+        temp_file = "temp.wav"
+        sf.write(temp_file, audio_data, 16000)
+
+        # Transcribe
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(temp_file) as source:
+            audio = recognizer.record(source)
             try:
-                recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                audio = recognizer.listen(source, timeout=5)
                 text = recognizer.recognize_google(audio)
                 self.transcription_label.setText(f"🗣 You said: {text}")
             except sr.UnknownValueError:
                 self.transcription_label.setText("Could not understand the audio.")
-            except sr.WaitTimeoutError:
-                self.transcription_label.setText("Listening timed out.")
             except Exception as e:
                 self.transcription_label.setText(f"Error: {str(e)}")
 
-    def stop_recording(self):
-        self.text_to_speech("Recording stopped.")
-        print("⏹ Stop recording.")
+    def update_waveform(self):
+        if self.audio_buffer:
+            num_chunks = 10
+            buffer_window = self.audio_buffer[-num_chunks:] if len(self.audio_buffer) >= num_chunks else self.audio_buffer
+            data = np.concatenate(buffer_window).flatten()
+
+            # Apply basic denoising: remove DC offset and normalize
+            data = data - np.mean(data)
+
+            # Optional: apply smoothing filter (rolling average)
+            window_size = 5
+            if len(data) > window_size:
+                smoothed = np.convolve(data, np.ones(window_size)/window_size, mode='valid')
+            else:
+                smoothed = data
+
+            # Normalize to prevent overamplification
+            max_val = np.max(np.abs(smoothed))
+            if max_val != 0:
+                smoothed = smoothed / max_val
+
+            self.waveform_plot.setData(smoothed)
+
+
+
 
     def send_schedule(self):
         task = self.task_input.text()
