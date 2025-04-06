@@ -15,9 +15,11 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QVBoxLayout, QStackedLayout,
     QLineEdit, QHBoxLayout, QMessageBox, QDateEdit, QTimeEdit
 )
-from PyQt5.QtCore import Qt, QDate, QTime
+from PyQt5.QtCore import Qt, QDate, QTime, QTimer
 from PyQt5.QtGui import QIcon
 import speech_recognition as sr
+from PyQt5.QtWidgets import QListWidget, QListWidgetItem
+
 
 # Initialize global variables
 dictionary = {}
@@ -74,6 +76,10 @@ class VoiceAIApp(QWidget):
         self.init_main_ui()
         self.init_stay_focused_ui()
         
+        self.task_timer = QTimer()
+        self.task_time = QTime(0, 0, 0)  # Start at 00:00:00
+        self.active_task = None
+        
         app_style = """
             QWidget {
                 font-family: 'Segoe UI', 'Roboto', sans-serif;
@@ -103,7 +109,7 @@ class VoiceAIApp(QWidget):
 
         self.stay_focused_button = QPushButton("Stay Focused")
         self.stay_focused_button.setStyleSheet("font-size: 18px; padding: 12px; background-color: #d0f0c0;")
-        self.stay_focused_button.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        self.stay_focused_button.clicked.connect(self.go_to_focus_page)
 
         layout.addWidget(self.label)
         layout.addWidget(self.start_button)
@@ -117,22 +123,30 @@ class VoiceAIApp(QWidget):
         page = QWidget()
         layout = QVBoxLayout()
         layout.setSpacing(20)
-        
+
         back_button = QPushButton("⬅ Back to Home")
         back_button.setStyleSheet("padding: 6px; background-color: #d0f0c0;")
         back_button.clicked.connect(self.stop_working)
-    
+
         self.task_label = QLabel("Start working now...")
         self.task_label.setStyleSheet("font-size: 16px; color: #333;")
-    
+
+        self.task_timer_label = QLabel("⏱ Time Spent: 00:00:00")
+        self.task_timer_label.setStyleSheet("font-size: 16px; color: #333;")
+
+        self.task_list_widget = QListWidget()
+        self.task_list_widget.setStyleSheet("font-size: 16px;")
+        
         self.task_status_button = QPushButton("Mark Task Completed")
         self.task_status_button.setStyleSheet("font-size: 16px; padding: 12px; background-color: #d0f0c0;")
         self.task_status_button.clicked.connect(self.mark_task_complete)
-    
+
         layout.addWidget(back_button, alignment=Qt.AlignLeft)
         layout.addWidget(self.task_label)
+        layout.addWidget(self.task_timer_label)
+        layout.addWidget(self.task_list_widget)
         layout.addWidget(self.task_status_button)
-    
+
         page.setLayout(layout)
         page.setStyleSheet("background-color: #f2fbf5;")
         self.stack.addWidget(page)
@@ -144,7 +158,7 @@ class VoiceAIApp(QWidget):
         
         back_button = QPushButton("⬅ Back to Home")
         back_button.setStyleSheet("padding: 6px; background-color: #d0f0c0;")
-        back_button.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        back_button.clicked.connect(lambda: (text_to_speech("You have returned to the home page."), self.stack.setCurrentIndex(0)))
 
         self.task_input = QLineEdit()
         self.task_input.setPlaceholderText("Enter your task here...")
@@ -185,6 +199,25 @@ class VoiceAIApp(QWidget):
         page.setLayout(layout)
         page.setStyleSheet("background-color: #f2fbf5;")
         self.stack.addWidget(page)
+        
+    def refresh_task_list(self):
+        self.task_list_widget.clear()
+
+        if not dictionary:
+            self.task_list_widget.addItem("No tasks yet.")
+            return
+
+        for task, value in dictionary.items():
+            item = QListWidgetItem()
+            if isinstance(value, str):  # completed with time string
+                item.setText(f"✅ {task} — {value}")
+                font = item.font()
+                font.setStrikeOut(True)
+                item.setFont(font)
+            else:
+                item.setText(f"• {task}")
+            self.task_list_widget.addItem(item)
+
 
     def start_recording(self):
         text_to_speech("Recording started.")
@@ -210,24 +243,72 @@ class VoiceAIApp(QWidget):
         print("⏹ Stop recording.")
 
     def send_schedule(self):
-        task = self.task_input.text()
+        task = self.task_input.text().strip()
+
+        if not task:
+            text_to_speech("Please enter a task before scheduling.")
+            QMessageBox.warning(self, "Missing Task", "You need to fill in the task field before proceeding.")
+            return
+
         dictionary[task] = False
+        self.refresh_task_list()
         text_to_speech(f"{task} has been added to your tasks.")
         QMessageBox.information(self, "Task Added", f"🗓 Task '{task}' has been added.")
 
+        # Update task label on focus page immediately
+        current_task = self.get_current_task()
+        if current_task:
+            self.task_label.setText(f"🧠 Current Task: {current_task}")
+
+    def start_task_timer(self):
+        self.task_time = QTime(0, 0, 0)
+        self.task_timer_label.setText("⏱ Time Spent: 00:00:00")
+        self.task_timer.timeout.connect(self.update_task_timer)
+        self.task_timer.start(1000)  # update every second
+    
+    def update_task_timer(self):
+        self.task_time = self.task_time.addSecs(1)
+        self.task_timer_label.setText(f"⏱ Time Spent: {self.task_time.toString('HH:mm:ss')}")
+    
+    def stop_task_timer(self):
+        self.task_timer.stop()
+        
     def mark_task_complete(self):
-        task = self.get_current_task()
-        if task:
-            dictionary[task] = True
-            text_to_speech(f"Task {task} marked as complete.")
-            self.task_label.setText(f"Current Task: {task} - Completed")
-            self.check_and_update_task()
+        current_task = self.get_current_task()
+
+        if current_task:
+            self.stop_task_timer()
+            time_spent = self.task_time.toString("HH:mm:ss")
+            dictionary[current_task] = time_spent  # 📝 Store time as value
+            text_to_speech(f"{current_task} has been marked as complete. Time spent: {time_spent}.")
+            QMessageBox.information(self, "Task Completed", f"✅ Task '{current_task}' completed in {time_spent}.")
+            self.task_label.setText("🎉 Task completed! Well done.")
+            self.task_timer_label.setText("")
+            self.refresh_task_list()
+        else:
+            text_to_speech("No active task to mark as complete.")
+            QMessageBox.warning(self, "No Task", "There is no current task to complete.")
 
     def get_current_task(self):
         for key, value in dictionary.items():
             if not value:
                 return key
         return None
+    
+    def go_to_focus_page(self):
+        current_task = self.get_current_task()
+
+        if current_task:
+            self.active_task = current_task
+            self.task_label.setText(f"🧠 Current Task: {current_task}")
+            self.start_task_timer()
+        else:
+            self.task_label.setText("🧠 No task available. Please add a new task.")
+            self.task_timer_label.setText("")
+
+        self.refresh_task_list()
+        self.stack.setCurrentIndex(2)
+
 
     def check_and_update_task(self):
         task = self.get_current_task()
