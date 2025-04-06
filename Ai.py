@@ -1,10 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Created on Sat Apr  5 14:45:46 2025
-
-@author: shaha
-"""
-
 import os
 import time
 import schedule
@@ -18,48 +11,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QDate, QTime
 from PyQt5.QtGui import QIcon
 import speech_recognition as sr
-
-# Initialize global variables
-dictionary = {}
-current_job = None
-reminder_job = None
-is_working = False  # Track whether the work session is active or not
-
-def server_initiation():
-    load_dotenv()
-    client = Neuphonic(api_key=os.environ.get('NEUPHONIC_API_KEY'))
-    sse = client.tts.SSEClient()
-    tts_config = TTSConfig(
-        speed=1.05,
-        lang_code='en',
-        voice_id='e564ba7e-aa8d-46a2-96a8-8dffedade48f'
-    )
-    return tts_config, sse
-
-tts_config, sse = server_initiation()
-
-def text_to_speech(text): 
-    with AudioPlayer() as player:
-        response = sse.send(text, tts_config=tts_config)
-        player.play(response)
-
-def break_timer():
-    global current_job
-    schedule.every(45).minutes.do(start_timer)
-
-def start_timer():
-    global current_job
-    text = "It is time for a 15 minutes break"
-    text_to_speech(text)
-    if current_job:
-        schedule.cancel_job(current_job)
-    current_job = schedule.every(15).minutes.do(end_break)
-
-def end_break():
-    text = "Break is over! Time to get back to work!"
-    text_to_speech(text)
-    schedule.cancel_job(current_job)
-    break_timer()
+import threading
 
 class VoiceAIApp(QWidget):
     def __init__(self):
@@ -73,7 +25,7 @@ class VoiceAIApp(QWidget):
         self.init_welcome_ui()
         self.init_main_ui()
         self.init_stay_focused_ui()
-        
+
         app_style = """
             QWidget {
                 font-family: 'Segoe UI', 'Roboto', sans-serif;
@@ -85,7 +37,55 @@ class VoiceAIApp(QWidget):
         """
         self.setStyleSheet(app_style)
 
-        self.stack.setCurrentIndex(0)  # Start with welcome screen
+        self.stack.setCurrentIndex(0)
+
+        self.schedule_thread = threading.Thread(target=self.run_schedules, daemon=True)
+        self.schedule_thread.start()
+
+        self.dictionary = {}
+        self.current_job = None
+        self.is_working = False
+
+        self.tts_config, self.sse = self.server_initiation()
+
+    def server_initiation(self):
+        load_dotenv()
+        client = Neuphonic(api_key=os.environ.get('NEUPHONIC_API_KEY'))
+        sse = client.tts.SSEClient()
+        tts_config = TTSConfig(
+            speed=1.05,
+            lang_code='en',
+            voice_id='e564ba7e-aa8d-46a2-96a8-8dffedade48f'
+        )
+        return tts_config, sse
+
+    def text_to_speech(self, text): 
+        with AudioPlayer() as player:
+            response = self.sse.send(text, tts_config=self.tts_config)
+            player.play(response)
+
+    def break_timer(self):
+        self.current_job = schedule.every(45).minutes.do(self.start_timer)
+
+    def start_timer(self):
+        if self.get_current_task() is not None:
+            text = "It is time for a 15 minutes break"
+            self.text_to_speech(text)
+            if self.current_job:
+                schedule.cancel_job(self.current_job)
+            self.current_job = schedule.every(15).minutes.do(self.end_break)
+
+    def end_break(self):
+        if self.get_current_task() is not None:
+            text = "Break is over! Time to get back to work!"
+            self.text_to_speech(text)
+            schedule.cancel_job(self.current_job)
+            self.break_timer()
+
+    def run_schedules(self):
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
     def init_welcome_ui(self):
         page = QWidget()
@@ -187,7 +187,7 @@ class VoiceAIApp(QWidget):
         self.stack.addWidget(page)
 
     def start_recording(self):
-        text_to_speech("Recording started.")
+        self.text_to_speech("Recording started.")
         print("🎙 Start recording...")
         recognizer = sr.Recognizer()
 
@@ -206,25 +206,26 @@ class VoiceAIApp(QWidget):
                 self.transcription_label.setText(f"Error: {str(e)}")
 
     def stop_recording(self):
-        text_to_speech("Recording stopped.")
+        self.text_to_speech("Recording stopped.")
         print("⏹ Stop recording.")
 
     def send_schedule(self):
         task = self.task_input.text()
-        dictionary[task] = False
-        text_to_speech(f"{task} has been added to your tasks.")
+        self.dictionary[task] = False
+        self.text_to_speech(f"{task} has been added to your tasks.")
         QMessageBox.information(self, "Task Added", f"🗓 Task '{task}' has been added.")
+        self.break_timer()
 
     def mark_task_complete(self):
         task = self.get_current_task()
         if task:
-            dictionary[task] = True
-            text_to_speech(f"Task {task} marked as complete.")
+            self.dictionary[task] = True
+            self.text_to_speech(f"Task {task} marked as complete.")
             self.task_label.setText(f"Current Task: {task} - Completed")
             self.check_and_update_task()
 
     def get_current_task(self):
-        for key, value in dictionary.items():
+        for key, value in self.dictionary.items():
             if not value:
                 return key
         return None
@@ -232,23 +233,23 @@ class VoiceAIApp(QWidget):
     def check_and_update_task(self):
         task = self.get_current_task()
         if task is None:
-            text_to_speech("All tasks are completed.")
+            self.text_to_speech("All tasks are completed.")
         else:
             self.task_label.setText(f"Current Task: {task}")
 
     def stop_working(self):
-        global is_working
-        is_working = False
+        self.is_working = False
         schedule.clear()
-        text_to_speech("You have returned to the home page.")
+        self.text_to_speech("You have returned to the home page.")
         self.stack.setCurrentIndex(0)
 
+    def closeEvent(self, event):
+        schedule.clear()
+        self.text_to_speech("Application is closing.")
+        event.accept()
+
 if __name__ == "__main__":
-    app = QApplication([])
+    app = QApplication([])  
     window = VoiceAIApp()
     window.show()
     app.exec_()
-    break_timer()
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
