@@ -6,60 +6,49 @@ Created on Sat Apr  5 14:45:46 2025
 """
 
 import os
-import random
 import time
 import schedule
 from pyneuphonic import Neuphonic, TTSConfig
 from pyneuphonic.player import AudioPlayer
+
+current_job = None
+
 def server_initiation():
     client = Neuphonic(api_key=os.environ.get('NEUPHONIC_API_KEY'))
-    sse = client.tts.SSEClient() #Creating a connection between me and the server
+    sse = client.tts.SSEClient()
     tts_config = TTSConfig(
-    speed=1.05, #speech speed
-    lang_code='en', # replace the lang_code with the desired language code.
-    voice_id='e564ba7e-aa8d-46a2-96a8-8dffedade48f'  # use client.voices.list() to view all available voices
-    ) #Voice_id is just to choose which voice we want
-    voices = client.voices.list()
-    #print(voices) to print out the list of voices so we gotta choose between them later
+        speed=1.05,
+        lang_code='en',
+        voice_id='e564ba7e-aa8d-46a2-96a8-8dffedade48f'
+    )
     return tts_config, sse
 
-tts_config, sse = server_initiation()   
+tts_config, sse = server_initiation()
+
 def text_to_speech(text): 
     with AudioPlayer() as player:
-        response = sse.send(txt, tts_config=tts_config)
+        response = sse.send(text, tts_config=tts_config)
         player.play(response)
-        player.save_audio('output.wav')  # save the audio to a .wav file
-        
-def motivational_prompts():
-    motivational_prompts_status = True#Need to adjust it and add a drop down menu from the main thing
-    motivational_prompts = [
-    "You're doing great, keep it up!",
-    "You're making awesome progress!",
-    "Keep going! You're almost there!",
-    "Great job! Now, let's focus on the next task.",
-    "Amazing effort! Keep pushing!",
-    "You’re on fire today, keep it up!",
-    "You’re staying focused! Let’s keep it going!"
-]
-    if motivational_prompts_status:
-        schedule.every(25).minutes.do(motivational_prompts_function,motivational_prompts)
-        
-def motivational_prompts_function(original_motivational_prompts):
-    sample_text = random.choice(original_motivational_prompts)
-    text_to_speech(sample_text)
-        
+
+def break_timer():
+    schedule.every(45).minutes.do(start_timer)
+
+def start_timer():
+    global current_job
+    text = "It is time for a 15 minutes break"
+    text_to_speech(text)
+    if current_job:
+        schedule.cancel_job(current_job)
+    current_job = schedule.every(15).minutes.do(end_break) 
+
+def end_break():
+    text = "Break is over! Time to get back to work!"
+    text_to_speech(text)
+    schedule.cancel_job(current_job)
+    break_timer()  
+
+break_timer()
 
 while True:
     schedule.run_pending()
     time.sleep(1)
-    
-    
-    
-    
-    
-        
-        
-        
-
-
-    
