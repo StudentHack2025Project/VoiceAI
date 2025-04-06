@@ -2,3 +2,4 @@ pyneuphonic
 pyaudio
 PyQt5
 schedule
+SpeechRecognition
